@@ -5,7 +5,7 @@ edition = "2021"
 description = "Terminal live-dashboard that surfaces the pull requests across all your repos that need action right now."
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/ok4ami/gitwatch-tui"
+repository = "https://github.com/AbuZhuma/gitwatch-tui"
 keywords = ["github", "tui", "pull-request", "dashboard", "cli"]
 categories = ["command-line-utilities"]
 

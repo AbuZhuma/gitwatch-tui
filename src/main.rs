@@ -3,6 +3,7 @@ mod classify;
 mod config;
 mod event;
 mod github;
+mod mock;
 mod notify;
 mod ui;
 
@@ -27,11 +28,18 @@ const REFRESH_SECS: u64 = 30;
     version,
     about = "Live dashboard for the PRs that need you now."
 )]
-struct Cli {}
+struct Cli {
+    #[arg(long, hide = true)]
+    demo: bool,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
+
+    if cli.demo {
+        return run_demo().await;
+    }
 
     let token = match github::auth::token() {
         Ok(token) => token,
@@ -88,6 +96,31 @@ async fn run(
     }
 
     Ok(())
+}
+
+async fn run_demo() -> Result<()> {
+    let mut app = App::new("octocat".to_owned(), mock::groups(), mock::repos());
+    app.set_pull_requests(mock::pull_requests());
+    app.highlighted.insert(("acme/web-client".to_owned(), 88));
+
+    let mut terminal = ratatui::init();
+    let mut keys = event::spawn_key_reader();
+    let result = loop {
+        if let Err(e) = terminal.draw(|frame| ui::render(&app, frame)) {
+            break Err(e.into());
+        }
+        if !app.running {
+            break Ok(());
+        }
+        match keys.recv().await {
+            Some(key) => {
+                app.handle_key(key.code);
+            }
+            None => break Ok(()),
+        }
+    };
+    ratatui::restore();
+    result
 }
 
 fn start_refresh(app: &mut App, client: &Arc<Client>, tx: &mpsc::Sender<Result<Vec<PullRequest>>>) {
