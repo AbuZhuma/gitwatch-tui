@@ -36,9 +36,10 @@ async fn main() -> Result<()> {
     };
     let client = Client::new(token)?;
     let viewer = client.viewer_login().await?;
+    let pull_requests = client.open_pull_requests().await?;
 
     let mut terminal = ratatui::init();
-    let mut app = App::new(viewer);
+    let mut app = App::new(viewer, pull_requests);
     let result = run(&mut terminal, &mut app);
     ratatui::restore();
     result

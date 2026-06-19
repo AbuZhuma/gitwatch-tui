@@ -1,10 +1,34 @@
 use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Utc};
 use reqwest::header::{AUTHORIZATION, USER_AGENT};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+use crate::classify::classify;
+use crate::github::models::{CiStatus, MergeState, PullRequest, ReviewDecision, Urgency};
+
 const GRAPHQL_URL: &str = "https://api.github.com/graphql";
 const CLIENT_USER_AGENT: &str = concat!("gitwatch-tui/", env!("CARGO_PKG_VERSION"));
+
+const OPEN_PRS_QUERY: &str = r#"{
+  search(query: "is:open is:pr author:@me archived:false", type: ISSUE, first: 100) {
+    nodes {
+      ... on PullRequest {
+        number
+        title
+        createdAt
+        updatedAt
+        isDraft
+        reviewDecision
+        mergeable
+        repository { nameWithOwner }
+        commits(last: 1) {
+          nodes { commit { statusCheckRollup { state } } }
+        }
+      }
+    }
+  }
+}"#;
 
 pub struct Client {
     http: reqwest::Client,
@@ -32,6 +56,57 @@ struct Viewer {
     login: String,
 }
 
+#[derive(Deserialize)]
+struct SearchData {
+    search: Search,
+}
+
+#[derive(Deserialize)]
+struct Search {
+    nodes: Vec<PrNode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrNode {
+    number: u64,
+    title: String,
+    created_at: String,
+    updated_at: String,
+    is_draft: bool,
+    review_decision: Option<String>,
+    mergeable: String,
+    repository: RepoNode,
+    commits: Commits,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepoNode {
+    name_with_owner: String,
+}
+
+#[derive(Deserialize)]
+struct Commits {
+    nodes: Vec<CommitNode>,
+}
+
+#[derive(Deserialize)]
+struct CommitNode {
+    commit: Commit,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Commit {
+    status_check_rollup: Option<StatusRollup>,
+}
+
+#[derive(Deserialize)]
+struct StatusRollup {
+    state: String,
+}
+
 impl Client {
     pub fn new(token: String) -> Result<Self> {
         let http = reqwest::Client::builder()
@@ -43,6 +118,36 @@ impl Client {
     pub async fn viewer_login(&self) -> Result<String> {
         let data: ViewerData = self.graphql("{ viewer { login } }").await?;
         Ok(data.viewer.login)
+    }
+
+    pub async fn open_pull_requests(&self) -> Result<Vec<PullRequest>> {
+        let data: SearchData = self.graphql(OPEN_PRS_QUERY).await?;
+        let now = Utc::now();
+
+        let mut pull_requests = Vec::with_capacity(data.search.nodes.len());
+        for node in data.search.nodes {
+            let created_at = parse_time(&node.created_at)?;
+            let updated_at = parse_time(&node.updated_at)?;
+            let ci = ci_status(&node.commits);
+
+            let mut pr = PullRequest {
+                repo: node.repository.name_with_owner,
+                number: node.number,
+                title: node.title,
+                created_at,
+                updated_at,
+                ci,
+                review: review_decision(node.review_decision.as_deref()),
+                mergeable: mergeable(&node.mergeable),
+                is_draft: node.is_draft,
+                urgency: Urgency::Background,
+            };
+            pr.urgency = classify(&pr, now);
+            pull_requests.push(pr);
+        }
+
+        pull_requests.sort_by_key(|pr| std::cmp::Reverse(pr.updated_at));
+        Ok(pull_requests)
     }
 
     async fn graphql<T: DeserializeOwned>(&self, query: &str) -> Result<T> {
@@ -77,5 +182,43 @@ impl Client {
         }
 
         body.data.context("GitHub API returned no data")
+    }
+}
+
+fn parse_time(value: &str) -> Result<DateTime<Utc>> {
+    Ok(DateTime::parse_from_rfc3339(value)
+        .with_context(|| format!("unexpected timestamp value: {value}"))?
+        .with_timezone(&Utc))
+}
+
+fn ci_status(commits: &Commits) -> CiStatus {
+    let state = commits
+        .nodes
+        .first()
+        .and_then(|node| node.commit.status_check_rollup.as_ref())
+        .map(|rollup| rollup.state.as_str());
+
+    match state {
+        Some("SUCCESS") => CiStatus::Passing,
+        Some("FAILURE" | "ERROR") => CiStatus::Failing,
+        Some("PENDING" | "EXPECTED") => CiStatus::Pending,
+        _ => CiStatus::None,
+    }
+}
+
+fn review_decision(value: Option<&str>) -> ReviewDecision {
+    match value {
+        Some("APPROVED") => ReviewDecision::Approved,
+        Some("CHANGES_REQUESTED") => ReviewDecision::ChangesRequested,
+        Some("REVIEW_REQUIRED") => ReviewDecision::ReviewRequired,
+        _ => ReviewDecision::None,
+    }
+}
+
+fn mergeable(value: &str) -> MergeState {
+    match value {
+        "MERGEABLE" => MergeState::Mergeable,
+        "CONFLICTING" => MergeState::Conflicting,
+        _ => MergeState::Unknown,
     }
 }
