@@ -15,8 +15,7 @@ use clap::Parser;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
-use crate::app::App;
-use crate::event::Action;
+use crate::app::{App, Effect};
 use crate::github::client::Client;
 use crate::github::models::PullRequest;
 
@@ -44,9 +43,11 @@ async fn main() -> Result<()> {
     };
     let client = Arc::new(Client::new(token)?);
     let viewer = client.viewer_login().await?;
+    let repositories = client.repositories().await.unwrap_or_default();
+    let groups = config::load();
 
     let mut terminal = ratatui::init();
-    let mut app = App::new(viewer);
+    let mut app = App::new(viewer, groups, repositories);
     let result = run(&mut terminal, &mut app, client).await;
     ratatui::restore();
     result
@@ -78,22 +79,11 @@ async fn run(
                     Err(e) => app.set_error(format!("{e:#}")),
                 }
             }
-            Some(key) = keys.recv() => match event::on_key(key.code) {
-                Action::Quit => app.quit(),
-                Action::Back => {
-                    if app.detail_open {
-                        app.close_detail();
-                    } else {
-                        app.quit();
-                    }
+            Some(key) = keys.recv() => {
+                if matches!(app.handle_key(key.code), Effect::Refresh) {
+                    start_refresh(app, &client, &fetch_tx);
                 }
-                Action::Refresh => start_refresh(app, &client, &fetch_tx),
-                Action::Next => app.select_next(),
-                Action::Prev => app.select_prev(),
-                Action::Open => app.open_detail(),
-                Action::Close => app.close_detail(),
-                Action::None => {}
-            },
+            }
         }
     }
 

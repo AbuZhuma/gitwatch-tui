@@ -49,6 +49,14 @@ const OPEN_PRS_QUERY: &str = r#"{
   }
 }"#;
 
+const REPOS_QUERY: &str = r#"{
+  viewer {
+    repositories(first: 100, affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER], orderBy: {field: PUSHED_AT, direction: DESC}) {
+      nodes { nameWithOwner }
+    }
+  }
+}"#;
+
 pub struct Client {
     http: reqwest::Client,
     token: String,
@@ -73,6 +81,21 @@ struct ViewerData {
 #[derive(Deserialize)]
 struct Viewer {
     login: String,
+}
+
+#[derive(Deserialize)]
+struct ReposData {
+    viewer: ReposViewer,
+}
+
+#[derive(Deserialize)]
+struct ReposViewer {
+    repositories: RepoConnection,
+}
+
+#[derive(Deserialize)]
+struct RepoConnection {
+    nodes: Vec<RepoNode>,
 }
 
 #[derive(Deserialize)]
@@ -185,6 +208,17 @@ impl Client {
     pub async fn viewer_login(&self) -> Result<String> {
         let data: ViewerData = self.graphql("{ viewer { login } }").await?;
         Ok(data.viewer.login)
+    }
+
+    pub async fn repositories(&self) -> Result<Vec<String>> {
+        let data: ReposData = self.graphql(REPOS_QUERY).await?;
+        Ok(data
+            .viewer
+            .repositories
+            .nodes
+            .into_iter()
+            .map(|node| node.name_with_owner)
+            .collect())
     }
 
     pub async fn open_pull_requests(&self, viewer: &str) -> Result<Vec<PullRequest>> {

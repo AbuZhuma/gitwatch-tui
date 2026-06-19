@@ -21,7 +21,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Some(pr) = app.pull_requests.get(app.selected) else {
+    let visible = app.visible();
+    let Some(pr) = visible.get(app.selected) else {
         let placeholder = Paragraph::new("Select a pull request.").style(Style::new().dim());
         frame.render_widget(placeholder, inner);
         return;
