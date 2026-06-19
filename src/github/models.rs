@@ -41,5 +41,6 @@ pub struct PullRequest {
     pub review: ReviewDecision,
     pub mergeable: MergeState,
     pub is_draft: bool,
+    pub mention_at: Option<DateTime<Utc>>,
     pub urgency: Urgency,
 }
