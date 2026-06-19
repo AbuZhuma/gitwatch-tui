@@ -6,7 +6,7 @@ use crate::github::models::{CiStatus, MergeState, PullRequest, ReviewDecision, U
 
 pub type PrKey = (String, u64);
 
-type Snapshot = (DateTime<Utc>, CiStatus, ReviewDecision, MergeState, Urgency);
+type Snapshot = (DateTime<Utc>, CiStatus, ReviewDecision, MergeState);
 
 #[derive(Debug)]
 pub struct App {
@@ -18,6 +18,7 @@ pub struct App {
     pub error: Option<String>,
     pub highlighted: HashSet<PrKey>,
     previous: HashMap<PrKey, Snapshot>,
+    mentions_seen: HashMap<PrKey, DateTime<Utc>>,
     loaded_once: bool,
 }
 
@@ -32,26 +33,39 @@ impl App {
             error: None,
             highlighted: HashSet::new(),
             previous: HashMap::new(),
+            mentions_seen: HashMap::new(),
             loaded_once: false,
         }
     }
 
-    pub fn set_pull_requests(&mut self, pull_requests: Vec<PullRequest>) {
+    pub fn set_pull_requests(&mut self, mut pull_requests: Vec<PullRequest>) {
         let first_load = !self.loaded_once;
         let mut highlighted = HashSet::new();
-        let mut next = HashMap::with_capacity(pull_requests.len());
+        let mut next_snapshots = HashMap::with_capacity(pull_requests.len());
+        let mut next_mentions = HashMap::new();
 
-        for pr in &pull_requests {
+        for pr in &mut pull_requests {
             let key = (pr.repo.clone(), pr.number);
+
+            if let Some(at) = pr.mention_at {
+                let is_new = self.mentions_seen.get(&key).is_none_or(|seen| at > *seen);
+                if is_new && !first_load {
+                    pr.urgency = Urgency::Now;
+                    highlighted.insert(key.clone());
+                }
+                next_mentions.insert(key.clone(), at);
+            }
+
             let snapshot = snapshot_of(pr);
             let changed = self.previous.get(&key).is_none_or(|prev| *prev != snapshot);
             if changed && !first_load {
                 highlighted.insert(key.clone());
             }
-            next.insert(key, snapshot);
+            next_snapshots.insert(key, snapshot);
         }
 
-        self.previous = next;
+        self.previous = next_snapshots;
+        self.mentions_seen = next_mentions;
         self.highlighted = highlighted;
         self.pull_requests = pull_requests;
         self.error = None;
@@ -69,7 +83,7 @@ impl App {
 }
 
 fn snapshot_of(pr: &PullRequest) -> Snapshot {
-    (pr.updated_at, pr.ci, pr.review, pr.mergeable, pr.urgency)
+    (pr.updated_at, pr.ci, pr.review, pr.mergeable)
 }
 
 #[cfg(test)]
@@ -78,6 +92,16 @@ mod tests {
     use chrono::TimeZone;
 
     fn pr(repo: &str, number: u64, ci: CiStatus, updated: i64) -> PullRequest {
+        pr_full(repo, number, ci, updated, None)
+    }
+
+    fn pr_full(
+        repo: &str,
+        number: u64,
+        ci: CiStatus,
+        updated: i64,
+        mention: Option<i64>,
+    ) -> PullRequest {
         PullRequest {
             repo: repo.to_owned(),
             number,
@@ -88,6 +112,7 @@ mod tests {
             review: ReviewDecision::None,
             mergeable: MergeState::Unknown,
             is_draft: false,
+            mention_at: mention.map(|s| Utc.timestamp_opt(s, 0).unwrap()),
             urgency: Urgency::Background,
         }
     }
@@ -125,5 +150,31 @@ mod tests {
         ]);
         assert!(app.highlighted.contains(&("c/d".to_owned(), 2)));
         assert_eq!(app.highlighted.len(), 1);
+    }
+
+    #[test]
+    fn new_mention_forces_now_and_highlight() {
+        let mut app = App::new("me".to_owned());
+        app.set_pull_requests(vec![pr_full("a/b", 1, CiStatus::None, 10, None)]);
+        app.set_pull_requests(vec![pr_full("a/b", 1, CiStatus::None, 60, Some(50))]);
+        assert_eq!(app.pull_requests[0].urgency, Urgency::Now);
+        assert!(app.highlighted.contains(&("a/b".to_owned(), 1)));
+    }
+
+    #[test]
+    fn mention_on_first_load_does_not_fire() {
+        let mut app = App::new("me".to_owned());
+        app.set_pull_requests(vec![pr_full("a/b", 1, CiStatus::None, 60, Some(50))]);
+        assert_eq!(app.pull_requests[0].urgency, Urgency::Background);
+        assert!(app.highlighted.is_empty());
+    }
+
+    #[test]
+    fn same_mention_does_not_refire() {
+        let mut app = App::new("me".to_owned());
+        app.set_pull_requests(vec![pr_full("a/b", 1, CiStatus::None, 60, Some(50))]);
+        app.set_pull_requests(vec![pr_full("a/b", 1, CiStatus::None, 60, Some(50))]);
+        assert_eq!(app.pull_requests[0].urgency, Urgency::Background);
+        assert!(app.highlighted.is_empty());
     }
 }
