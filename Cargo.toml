@@ -1,0 +1,25 @@
+[package]
+name = "gitwatch-tui"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal live-dashboard that surfaces the pull requests across all your repos that need action right now."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/ok4ami/gitwatch-tui"
+keywords = ["github", "tui", "pull-request", "dashboard", "cli"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "gitwatch"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
