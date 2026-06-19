@@ -6,32 +6,36 @@ use ratatui::{
     Frame,
 };
 
+use super::border_style;
 use super::widgets::ci_glyph;
-use crate::app::App;
+use crate::app::{App, Filter};
 use crate::github::models::{PullRequest, Urgency};
 
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+pub fn render(frame: &mut Frame, area: Rect, app: &App, focused: bool) {
+    let visible = app.visible();
+
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" Pull requests ({}) ", app.pull_requests.len()))
+        .title(format!(
+            " Pull requests{} ({}) ",
+            filter_suffix(&app.filter),
+            visible.len()
+        ))
+        .border_style(border_style(focused))
         .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if app.pull_requests.is_empty() {
+    if visible.is_empty() {
         let (message, style) = empty_message(app);
         frame.render_widget(Paragraph::new(message).style(style), inner);
         return;
     }
 
-    let items: Vec<ListItem> = app
-        .pull_requests
+    let items: Vec<ListItem> = visible
         .iter()
         .enumerate()
-        .map(|(index, pr)| {
-            let highlighted = app.highlighted.contains(&(pr.repo.clone(), pr.number));
-            pr_item(pr, highlighted, index == app.selected)
-        })
+        .map(|(index, pr)| pr_item(pr, app.is_new(pr), focused && index == app.selected))
         .collect();
 
     let mut state = ListState::default();
@@ -39,6 +43,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let list = List::new(items);
     frame.render_stateful_widget(list, inner, &mut state);
+}
+
+fn filter_suffix(filter: &Filter) -> String {
+    match filter {
+        Filter::All => String::new(),
+        Filter::Group(name) => format!(" · {name}"),
+        Filter::Repo(repo) => format!(" · {repo}"),
+    }
 }
 
 fn empty_message(app: &App) -> (String, Style) {
@@ -50,10 +62,7 @@ fn empty_message(app: &App) -> (String, Style) {
     } else if app.last_updated.is_none() {
         ("Loading…".to_owned(), Style::new().dim())
     } else {
-        (
-            "No open pull requests authored by you.".to_owned(),
-            Style::new().dim(),
-        )
+        ("No open pull requests here.".to_owned(), Style::new().dim())
     }
 }
 
