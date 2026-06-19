@@ -1,15 +1,14 @@
-use chrono::{DateTime, Utc};
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Padding, Paragraph, Row, Table},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
-use super::widgets::relative_time;
+use super::widgets::ci_glyph;
 use crate::app::App;
-use crate::github::models::{CiStatus, PullRequest, Urgency};
+use crate::github::models::{PullRequest, Urgency};
 
 const SECTIONS: [(Urgency, &str, Color); 3] = [
     (Urgency::Now, "NEEDS ACTION", Color::Red),
@@ -17,55 +16,7 @@ const SECTIONS: [(Urgency, &str, Color); 3] = [
     (Urgency::Background, "BACKGROUND", Color::Gray),
 ];
 
-pub fn render(app: &App, frame: &mut Frame) {
-    let [header_area, body_area, footer_area] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(frame.area());
-
-    render_header(frame, header_area, app);
-    render_body(frame, body_area, app);
-    render_footer(frame, footer_area);
-}
-
-fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let left = format!(" gitwatch · @{} ", app.viewer);
-    let right = format!("{} ", status_text(app));
-
-    let width = area.width as usize;
-    let used = left.chars().count() + right.chars().count();
-    let pad = " ".repeat(width.saturating_sub(used));
-
-    let header =
-        Paragraph::new(format!("{left}{pad}{right}")).style(Style::new().reversed().bold());
-    frame.render_widget(header, area);
-}
-
-fn status_text(app: &App) -> String {
-    if app.refreshing {
-        return "⟳ refreshing…".to_owned();
-    }
-    if app.error.is_some() {
-        return match app.last_updated {
-            Some(at) => format!("⚠ update failed · last {}", relative_time(at, Utc::now())),
-            None => "⚠ update failed".to_owned(),
-        };
-    }
-    match app.last_updated {
-        Some(at) => {
-            let mut text = format!("⟳ updated {}", relative_time(at, Utc::now()));
-            if !app.highlighted.is_empty() {
-                text.push_str(&format!(" · {} new", app.highlighted.len()));
-            }
-            text
-        }
-        None => String::new(),
-    }
-}
-
-fn render_body(frame: &mut Frame, area: Rect, app: &App) {
+pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" Pull requests ({}) ", app.pull_requests.len()))
@@ -74,117 +25,81 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(block, area);
 
     if app.pull_requests.is_empty() {
-        let (message, style) = if let Some(error) = &app.error {
-            (
-                format!("Could not load pull requests:\n\n{error}"),
-                Style::new().red(),
-            )
-        } else if app.last_updated.is_none() {
-            ("Loading…".to_owned(), Style::new().dim())
-        } else {
-            (
-                "No open pull requests authored by you.".to_owned(),
-                Style::new().dim(),
-            )
-        };
+        let (message, style) = empty_message(app);
         frame.render_widget(Paragraph::new(message).style(style), inner);
         return;
     }
 
-    let groups: Vec<(&str, Color, Vec<&PullRequest>)> = SECTIONS
-        .iter()
-        .filter_map(|(urgency, label, color)| {
-            let items: Vec<&PullRequest> = app
-                .pull_requests
-                .iter()
-                .filter(|pr| pr.urgency == *urgency)
-                .collect();
-            (!items.is_empty()).then_some((*label, *color, items))
-        })
-        .collect();
+    let mut items = Vec::new();
+    let mut row_of_pr = vec![0usize; app.pull_requests.len()];
+    let mut current: Option<Urgency> = None;
 
-    let mut constraints = Vec::new();
-    for (_, _, items) in &groups {
-        constraints.push(Constraint::Length(1));
-        constraints.push(Constraint::Length(items.len() as u16));
-        constraints.push(Constraint::Length(1));
+    for (index, pr) in app.pull_requests.iter().enumerate() {
+        if current != Some(pr.urgency) {
+            current = Some(pr.urgency);
+            items.push(section_item(pr.urgency, &app.pull_requests));
+        }
+        let highlighted = app.highlighted.contains(&(pr.repo.clone(), pr.number));
+        row_of_pr[index] = items.len();
+        items.push(pr_item(pr, highlighted));
     }
-    let chunks = Layout::vertical(constraints).split(inner);
 
-    let now = Utc::now();
-    for (index, (label, color, items)) in groups.iter().enumerate() {
-        let header = Paragraph::new(Line::from(Span::styled(
-            format!("● {label} ({})", items.len()),
-            Style::new().fg(*color).bold(),
-        )));
-        frame.render_widget(header, chunks[index * 3]);
+    let mut state = ListState::default();
+    state.select(Some(row_of_pr[app.selected]));
 
-        let rows = items.iter().map(|pr| {
-            let highlighted = app.highlighted.contains(&(pr.repo.clone(), pr.number));
-            pr_row(pr, now, highlighted)
-        });
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Length(1),
-                Constraint::Percentage(26),
-                Constraint::Min(20),
-                Constraint::Length(12),
-                Constraint::Length(9),
-            ],
+    let list = List::new(items).highlight_style(Style::new().reversed());
+    frame.render_stateful_widget(list, inner, &mut state);
+}
+
+fn empty_message(app: &App) -> (String, Style) {
+    if let Some(error) = &app.error {
+        (
+            format!("Could not load pull requests:\n\n{error}"),
+            Style::new().red(),
         )
-        .column_spacing(2);
-        frame.render_widget(table, chunks[index * 3 + 1]);
+    } else if app.last_updated.is_none() {
+        ("Loading…".to_owned(), Style::new().dim())
+    } else {
+        (
+            "No open pull requests authored by you.".to_owned(),
+            Style::new().dim(),
+        )
     }
 }
 
-fn pr_row(pr: &PullRequest, now: DateTime<Utc>, highlighted: bool) -> Row<'_> {
+fn section_item(urgency: Urgency, pull_requests: &[PullRequest]) -> ListItem<'static> {
+    let (label, color) = section_meta(urgency);
+    let count = pull_requests
+        .iter()
+        .filter(|pr| pr.urgency == urgency)
+        .count();
+    ListItem::new(Line::from(Span::styled(
+        format!("● {label} ({count})"),
+        Style::new().fg(color).bold(),
+    )))
+}
+
+fn section_meta(urgency: Urgency) -> (&'static str, Color) {
+    SECTIONS
+        .iter()
+        .find(|(candidate, _, _)| *candidate == urgency)
+        .map(|(_, label, color)| (*label, *color))
+        .unwrap_or(("", Color::Gray))
+}
+
+fn pr_item(pr: &PullRequest, highlighted: bool) -> ListItem<'static> {
     let marker = if highlighted {
         Span::styled("▌", Style::new().cyan().bold())
     } else {
         Span::raw(" ")
     };
-    let title_style = if highlighted {
-        Style::new().bold()
-    } else {
-        Style::new()
-    };
 
-    Row::new(vec![
-        Cell::from(marker),
-        Cell::from(pr.repo.as_str()),
-        Cell::from(Line::from(vec![
-            Span::styled(format!("#{} ", pr.number), Style::new().dim()),
-            Span::styled(pr.title.as_str(), title_style),
-        ])),
-        Cell::from(ci_badge(pr.ci)),
-        Cell::from(Span::styled(
-            relative_time(pr.updated_at, now),
-            Style::new().dim(),
-        )),
-    ])
-}
-
-fn ci_badge(ci: CiStatus) -> Span<'static> {
-    match ci {
-        CiStatus::Passing => Span::styled("✓ checks", Style::new().green()),
-        CiStatus::Failing => Span::styled("✗ CI failed", Style::new().red()),
-        CiStatus::Pending => Span::styled("● running", Style::new().yellow()),
-        CiStatus::None => Span::styled("· no CI", Style::new().dim()),
-    }
-}
-
-fn render_footer(frame: &mut Frame, area: Rect) {
-    let footer = Paragraph::new(Line::from(vec![
-        Span::raw(" q ").reversed(),
-        Span::raw(" quit"),
-        Span::raw("   "),
-        Span::raw(" r ").reversed(),
-        Span::raw(" refresh"),
-        Span::raw("   "),
-        Span::raw(" ? ").reversed(),
-        Span::raw(" help (soon)"),
+    ListItem::new(Line::from(vec![
+        marker,
+        Span::raw(" "),
+        ci_glyph(pr.ci),
+        Span::raw(" "),
+        Span::styled(format!("{} #{} ", pr.repo, pr.number), Style::new().dim()),
+        Span::raw(pr.title.clone()),
     ]))
-    .style(Style::new().dim());
-    frame.render_widget(footer, area);
 }
