@@ -5,6 +5,8 @@ pub enum Action {
     None,
     Quit,
     Refresh,
+    Next,
+    Prev,
 }
 
 pub fn spawn_key_reader() -> mpsc::Receiver<KeyEvent> {
@@ -29,6 +31,8 @@ pub fn on_key(code: KeyCode) -> Action {
     match code {
         KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
         KeyCode::Char('r') => Action::Refresh,
+        KeyCode::Char('j') | KeyCode::Down => Action::Next,
+        KeyCode::Char('k') | KeyCode::Up => Action::Prev,
         _ => Action::None,
     }
 }

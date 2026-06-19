@@ -1,4 +1,10 @@
 use chrono::{DateTime, Utc};
+use ratatui::{
+    style::{Style, Stylize},
+    text::Span,
+};
+
+use crate::github::models::CiStatus;
 
 pub fn relative_time(time: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let seconds = (now - time).num_seconds();
@@ -24,5 +30,14 @@ pub fn relative_time(time: DateTime<Utc>, now: DateTime<Utc>) -> String {
         format!("{}mo ago", days / 30)
     } else {
         format!("{}y ago", days / 365)
+    }
+}
+
+pub fn ci_glyph(ci: CiStatus) -> Span<'static> {
+    match ci {
+        CiStatus::Passing => Span::styled("✓", Style::new().green()),
+        CiStatus::Failing => Span::styled("✗", Style::new().red()),
+        CiStatus::Pending => Span::styled("●", Style::new().yellow()),
+        CiStatus::None => Span::styled("·", Style::new().dim()),
     }
 }
