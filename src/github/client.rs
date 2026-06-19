@@ -5,7 +5,10 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 use crate::classify::classify;
-use crate::github::models::{CiStatus, MergeState, PullRequest, ReviewDecision, Urgency};
+use crate::github::models::{
+    Activity, Check, CiStatus, MergeState, PullRequest, Review, ReviewDecision, ReviewState,
+    Urgency,
+};
 
 const GRAPHQL_URL: &str = "https://api.github.com/graphql";
 const CLIENT_USER_AGENT: &str = concat!("gitwatch-tui/", env!("CARGO_PKG_VERSION"));
@@ -16,6 +19,8 @@ const OPEN_PRS_QUERY: &str = r#"{
       ... on PullRequest {
         number
         title
+        headRefName
+        baseRefName
         createdAt
         updatedAt
         isDraft
@@ -23,7 +28,18 @@ const OPEN_PRS_QUERY: &str = r#"{
         mergeable
         repository { nameWithOwner }
         commits(last: 1) {
-          nodes { commit { statusCheckRollup { state } } }
+          nodes { commit { statusCheckRollup {
+            state
+            contexts(first: 20) {
+              nodes {
+                ... on CheckRun { name conclusion status }
+                ... on StatusContext { context state }
+              }
+            }
+          } } }
+        }
+        latestReviews(first: 10) {
+          nodes { author { login } state }
         }
         comments(last: 10) {
           nodes { author { login } createdAt bodyText }
@@ -74,6 +90,8 @@ struct Search {
 struct PrNode {
     number: u64,
     title: String,
+    head_ref_name: String,
+    base_ref_name: String,
     created_at: String,
     updated_at: String,
     is_draft: bool,
@@ -81,6 +99,7 @@ struct PrNode {
     mergeable: String,
     repository: RepoNode,
     commits: Commits,
+    latest_reviews: ReviewConnection,
     comments: CommentConnection,
 }
 
@@ -108,6 +127,32 @@ struct Commit {
 
 #[derive(Deserialize)]
 struct StatusRollup {
+    state: String,
+    contexts: Contexts,
+}
+
+#[derive(Deserialize)]
+struct Contexts {
+    nodes: Vec<ContextNode>,
+}
+
+#[derive(Deserialize)]
+struct ContextNode {
+    name: Option<String>,
+    conclusion: Option<String>,
+    status: Option<String>,
+    context: Option<String>,
+    state: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReviewConnection {
+    nodes: Vec<ReviewNode>,
+}
+
+#[derive(Deserialize)]
+struct ReviewNode {
+    author: Option<Author>,
     state: String,
 }
 
@@ -150,21 +195,29 @@ impl Client {
         for node in data.search.nodes {
             let created_at = parse_time(&node.created_at)?;
             let updated_at = parse_time(&node.updated_at)?;
-            let ci = ci_status(&node.commits);
-            let mention_at = latest_mention(&node.comments, viewer);
+            let rollup = node
+                .commits
+                .nodes
+                .first()
+                .and_then(|commit| commit.commit.status_check_rollup.as_ref());
 
             let mut pr = PullRequest {
                 repo: node.repository.name_with_owner,
                 number: node.number,
                 title: node.title,
+                head_ref: node.head_ref_name,
+                base_ref: node.base_ref_name,
                 created_at,
                 updated_at,
-                ci,
+                ci: ci_status(rollup),
                 review: review_decision(node.review_decision.as_deref()),
                 mergeable: mergeable(&node.mergeable),
                 is_draft: node.is_draft,
-                mention_at,
+                mention_at: latest_mention(&node.comments, viewer),
                 urgency: Urgency::Background,
+                checks: checks_of(rollup),
+                reviews: reviews_of(&node.latest_reviews),
+                activity: activity_of(&node.comments),
             };
             pr.urgency = classify(&pr, now);
             pull_requests.push(pr);
@@ -215,19 +268,113 @@ fn parse_time(value: &str) -> Result<DateTime<Utc>> {
         .with_timezone(&Utc))
 }
 
-fn ci_status(commits: &Commits) -> CiStatus {
-    let state = commits
-        .nodes
-        .first()
-        .and_then(|node| node.commit.status_check_rollup.as_ref())
-        .map(|rollup| rollup.state.as_str());
+fn ci_status(rollup: Option<&StatusRollup>) -> CiStatus {
+    match rollup.map(|rollup| rollup.state.as_str()) {
+        Some("SUCCESS") => CiStatus::Passing,
+        Some("FAILURE" | "ERROR") => CiStatus::Failing,
+        Some("PENDING" | "EXPECTED") => CiStatus::Pending,
+        _ => CiStatus::None,
+    }
+}
 
+fn checks_of(rollup: Option<&StatusRollup>) -> Vec<Check> {
+    let Some(rollup) = rollup else {
+        return Vec::new();
+    };
+
+    rollup
+        .contexts
+        .nodes
+        .iter()
+        .map(|node| {
+            if let Some(name) = &node.name {
+                Check {
+                    name: name.clone(),
+                    state: check_run_state(node.conclusion.as_deref(), node.status.as_deref()),
+                }
+            } else {
+                Check {
+                    name: node.context.clone().unwrap_or_default(),
+                    state: status_context_state(node.state.as_deref()),
+                }
+            }
+        })
+        .collect()
+}
+
+fn check_run_state(conclusion: Option<&str>, status: Option<&str>) -> CiStatus {
+    if status != Some("COMPLETED") && conclusion.is_none() {
+        return CiStatus::Pending;
+    }
+    match conclusion {
+        Some("SUCCESS") => CiStatus::Passing,
+        Some("FAILURE" | "TIMED_OUT" | "CANCELLED" | "ERROR" | "STARTUP_FAILURE") => {
+            CiStatus::Failing
+        }
+        Some("NEUTRAL" | "SKIPPED" | "STALE") => CiStatus::None,
+        _ => CiStatus::Pending,
+    }
+}
+
+fn status_context_state(state: Option<&str>) -> CiStatus {
     match state {
         Some("SUCCESS") => CiStatus::Passing,
         Some("FAILURE" | "ERROR") => CiStatus::Failing,
         Some("PENDING" | "EXPECTED") => CiStatus::Pending,
         _ => CiStatus::None,
     }
+}
+
+fn reviews_of(reviews: &ReviewConnection) -> Vec<Review> {
+    reviews
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            node.author.as_ref().map(|author| Review {
+                login: author.login.clone(),
+                state: review_state(&node.state),
+            })
+        })
+        .collect()
+}
+
+fn review_state(state: &str) -> ReviewState {
+    match state {
+        "APPROVED" => ReviewState::Approved,
+        "CHANGES_REQUESTED" => ReviewState::ChangesRequested,
+        "COMMENTED" => ReviewState::Commented,
+        _ => ReviewState::Other,
+    }
+}
+
+fn activity_of(comments: &CommentConnection) -> Vec<Activity> {
+    comments
+        .nodes
+        .iter()
+        .filter_map(|comment| {
+            let at = DateTime::parse_from_rfc3339(&comment.created_at)
+                .ok()?
+                .with_timezone(&Utc);
+            let author = comment
+                .author
+                .as_ref()
+                .map(|author| author.login.clone())
+                .unwrap_or_else(|| "ghost".to_owned());
+            Some(Activity {
+                author,
+                at,
+                summary: summarize(&comment.body_text),
+            })
+        })
+        .collect()
+}
+
+fn summarize(body: &str) -> String {
+    body.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .to_owned()
 }
 
 fn review_decision(value: Option<&str>) -> ReviewDecision {

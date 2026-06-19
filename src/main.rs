@@ -81,6 +81,8 @@ async fn run(
             Some(key) = keys.recv() => match event::on_key(key.code) {
                 Action::Quit => app.quit(),
                 Action::Refresh => start_refresh(app, &client, &fetch_tx),
+                Action::Next => app.select_next(),
+                Action::Prev => app.select_prev(),
                 Action::None => {}
             },
         }

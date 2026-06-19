@@ -13,6 +13,7 @@ pub struct App {
     pub running: bool,
     pub viewer: String,
     pub pull_requests: Vec<PullRequest>,
+    pub selected: usize,
     pub refreshing: bool,
     pub last_updated: Option<DateTime<Utc>>,
     pub error: Option<String>,
@@ -28,6 +29,7 @@ impl App {
             running: true,
             viewer,
             pull_requests: Vec::new(),
+            selected: 0,
             refreshing: false,
             last_updated: None,
             error: None,
@@ -40,6 +42,11 @@ impl App {
 
     pub fn set_pull_requests(&mut self, mut pull_requests: Vec<PullRequest>) {
         let first_load = !self.loaded_once;
+        let selected_key = self
+            .pull_requests
+            .get(self.selected)
+            .map(|pr| (pr.repo.clone(), pr.number));
+
         let mut highlighted = HashSet::new();
         let mut next_snapshots = HashMap::with_capacity(pull_requests.len());
         let mut next_mentions = HashMap::new();
@@ -64,6 +71,21 @@ impl App {
             next_snapshots.insert(key, snapshot);
         }
 
+        pull_requests.sort_by(|a, b| {
+            urgency_rank(a.urgency)
+                .cmp(&urgency_rank(b.urgency))
+                .then(b.updated_at.cmp(&a.updated_at))
+        });
+
+        self.selected = selected_key
+            .and_then(|key| {
+                pull_requests
+                    .iter()
+                    .position(|pr| pr.repo == key.0 && pr.number == key.1)
+            })
+            .unwrap_or(0)
+            .min(pull_requests.len().saturating_sub(1));
+
         self.previous = next_snapshots;
         self.mentions_seen = next_mentions;
         self.highlighted = highlighted;
@@ -73,12 +95,30 @@ impl App {
         self.loaded_once = true;
     }
 
+    pub fn select_next(&mut self) {
+        if !self.pull_requests.is_empty() {
+            self.selected = (self.selected + 1).min(self.pull_requests.len() - 1);
+        }
+    }
+
+    pub fn select_prev(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
     pub fn set_error(&mut self, message: String) {
         self.error = Some(message);
     }
 
     pub fn quit(&mut self) {
         self.running = false;
+    }
+}
+
+fn urgency_rank(urgency: Urgency) -> u8 {
+    match urgency {
+        Urgency::Now => 0,
+        Urgency::Soon => 1,
+        Urgency::Background => 2,
     }
 }
 
@@ -106,6 +146,8 @@ mod tests {
             repo: repo.to_owned(),
             number,
             title: "title".to_owned(),
+            head_ref: "feature".to_owned(),
+            base_ref: "main".to_owned(),
             created_at: Utc.timestamp_opt(0, 0).unwrap(),
             updated_at: Utc.timestamp_opt(updated, 0).unwrap(),
             ci,
@@ -114,6 +156,9 @@ mod tests {
             is_draft: false,
             mention_at: mention.map(|s| Utc.timestamp_opt(s, 0).unwrap()),
             urgency: Urgency::Background,
+            checks: Vec::new(),
+            reviews: Vec::new(),
+            activity: Vec::new(),
         }
     }
 
@@ -176,5 +221,34 @@ mod tests {
         app.set_pull_requests(vec![pr_full("a/b", 1, CiStatus::None, 60, Some(50))]);
         assert_eq!(app.pull_requests[0].urgency, Urgency::Background);
         assert!(app.highlighted.is_empty());
+    }
+
+    #[test]
+    fn now_sorts_before_background() {
+        let mut app = App::new("me".to_owned());
+        let mut background = pr("bg/repo", 1, CiStatus::Passing, 100);
+        background.urgency = Urgency::Background;
+        let mut now = pr("now/repo", 2, CiStatus::Failing, 10);
+        now.urgency = Urgency::Now;
+
+        app.set_pull_requests(vec![background, now]);
+        assert_eq!(app.pull_requests[0].urgency, Urgency::Now);
+        assert_eq!(app.pull_requests[0].repo, "now/repo");
+    }
+
+    #[test]
+    fn selection_follows_pr_across_refresh() {
+        let mut app = App::new("me".to_owned());
+        app.set_pull_requests(vec![
+            pr("a/b", 1, CiStatus::Failing, 100),
+            pr("c/d", 2, CiStatus::Passing, 50),
+        ]);
+        app.select_next();
+        let selected = app.pull_requests[app.selected].repo.clone();
+        app.set_pull_requests(vec![
+            pr("c/d", 2, CiStatus::Failing, 200),
+            pr("a/b", 1, CiStatus::Failing, 100),
+        ]);
+        assert_eq!(app.pull_requests[app.selected].repo, selected);
     }
 }

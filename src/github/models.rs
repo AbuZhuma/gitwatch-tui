@@ -17,6 +17,14 @@ pub enum ReviewDecision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeState {
     Mergeable,
     Conflicting,
@@ -31,10 +39,31 @@ pub enum Urgency {
 }
 
 #[derive(Debug, Clone)]
+pub struct Check {
+    pub name: String,
+    pub state: CiStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct Review {
+    pub login: String,
+    pub state: ReviewState,
+}
+
+#[derive(Debug, Clone)]
+pub struct Activity {
+    pub author: String,
+    pub at: DateTime<Utc>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct PullRequest {
     pub repo: String,
     pub number: u64,
     pub title: String,
+    pub head_ref: String,
+    pub base_ref: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub ci: CiStatus,
@@ -43,4 +72,7 @@ pub struct PullRequest {
     pub is_draft: bool,
     pub mention_at: Option<DateTime<Utc>>,
     pub urgency: Urgency,
+    pub checks: Vec<Check>,
+    pub reviews: Vec<Review>,
+    pub activity: Vec<Activity>,
 }
