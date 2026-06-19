@@ -25,6 +25,9 @@ const OPEN_PRS_QUERY: &str = r#"{
         commits(last: 1) {
           nodes { commit { statusCheckRollup { state } } }
         }
+        comments(last: 10) {
+          nodes { author { login } createdAt bodyText }
+        }
       }
     }
   }
@@ -78,6 +81,7 @@ struct PrNode {
     mergeable: String,
     repository: RepoNode,
     commits: Commits,
+    comments: CommentConnection,
 }
 
 #[derive(Deserialize)]
@@ -107,6 +111,24 @@ struct StatusRollup {
     state: String,
 }
 
+#[derive(Deserialize)]
+struct CommentConnection {
+    nodes: Vec<CommentNode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentNode {
+    author: Option<Author>,
+    created_at: String,
+    body_text: String,
+}
+
+#[derive(Deserialize)]
+struct Author {
+    login: String,
+}
+
 impl Client {
     pub fn new(token: String) -> Result<Self> {
         let http = reqwest::Client::builder()
@@ -120,7 +142,7 @@ impl Client {
         Ok(data.viewer.login)
     }
 
-    pub async fn open_pull_requests(&self) -> Result<Vec<PullRequest>> {
+    pub async fn open_pull_requests(&self, viewer: &str) -> Result<Vec<PullRequest>> {
         let data: SearchData = self.graphql(OPEN_PRS_QUERY).await?;
         let now = Utc::now();
 
@@ -129,6 +151,7 @@ impl Client {
             let created_at = parse_time(&node.created_at)?;
             let updated_at = parse_time(&node.updated_at)?;
             let ci = ci_status(&node.commits);
+            let mention_at = latest_mention(&node.comments, viewer);
 
             let mut pr = PullRequest {
                 repo: node.repository.name_with_owner,
@@ -140,6 +163,7 @@ impl Client {
                 review: review_decision(node.review_decision.as_deref()),
                 mergeable: mergeable(&node.mergeable),
                 is_draft: node.is_draft,
+                mention_at,
                 urgency: Urgency::Background,
             };
             pr.urgency = classify(&pr, now);
@@ -221,4 +245,39 @@ fn mergeable(value: &str) -> MergeState {
         "CONFLICTING" => MergeState::Conflicting,
         _ => MergeState::Unknown,
     }
+}
+
+fn latest_mention(comments: &CommentConnection, viewer: &str) -> Option<DateTime<Utc>> {
+    comments
+        .nodes
+        .iter()
+        .filter(|comment| {
+            comment
+                .author
+                .as_ref()
+                .is_some_and(|author| !author.login.eq_ignore_ascii_case(viewer))
+        })
+        .filter(|comment| mentions_user(&comment.body_text, viewer))
+        .filter_map(|comment| DateTime::parse_from_rfc3339(&comment.created_at).ok())
+        .map(|time| time.with_timezone(&Utc))
+        .max()
+}
+
+fn mentions_user(body: &str, viewer: &str) -> bool {
+    let needle = format!("@{}", viewer.to_lowercase());
+    let body = body.to_lowercase();
+
+    let mut start = 0;
+    while let Some(offset) = body[start..].find(&needle) {
+        let after = start + offset + needle.len();
+        let boundary = body[after..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '/');
+        if boundary {
+            return true;
+        }
+        start = after;
+    }
+    false
 }

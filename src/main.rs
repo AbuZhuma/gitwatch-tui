@@ -97,7 +97,8 @@ fn start_refresh(app: &mut App, client: &Arc<Client>, tx: &mpsc::Sender<Result<V
 
     let client = Arc::clone(client);
     let tx = tx.clone();
+    let viewer = app.viewer.clone();
     tokio::spawn(async move {
-        let _ = tx.send(client.open_pull_requests().await).await;
+        let _ = tx.send(client.open_pull_requests(&viewer).await).await;
     });
 }
