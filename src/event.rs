@@ -1,26 +1,34 @@
-use std::time::Duration;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use tokio::sync::mpsc;
 
-use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-
-use crate::app::App;
-
-const POLL_TIMEOUT: Duration = Duration::from_millis(250);
-
-pub fn handle(app: &mut App) -> Result<()> {
-    if event::poll(POLL_TIMEOUT)? {
-        if let Event::Key(key) = event::read()? {
-            if key.kind == KeyEventKind::Press {
-                on_key(app, key.code);
-            }
-        }
-    }
-    Ok(())
+pub enum Action {
+    None,
+    Quit,
+    Refresh,
 }
 
-fn on_key(app: &mut App, code: KeyCode) {
+pub fn spawn_key_reader() -> mpsc::Receiver<KeyEvent> {
+    let (tx, rx) = mpsc::channel(32);
+
+    std::thread::spawn(move || loop {
+        match event::read() {
+            Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                if tx.blocking_send(key).is_err() {
+                    break;
+                }
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    });
+
+    rx
+}
+
+pub fn on_key(code: KeyCode) -> Action {
     match code {
-        KeyCode::Char('q') | KeyCode::Esc => app.quit(),
-        _ => {}
+        KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
+        KeyCode::Char('r') => Action::Refresh,
+        _ => Action::None,
     }
 }

@@ -31,12 +31,38 @@ pub fn render(app: &App, frame: &mut Frame) {
 }
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let header = Paragraph::new(Line::from(vec![
-        Span::raw(" gitwatch "),
-        Span::raw(format!("· @{} ", app.viewer)),
-    ]))
-    .style(Style::new().reversed().bold());
+    let left = format!(" gitwatch · @{} ", app.viewer);
+    let right = format!("{} ", status_text(app));
+
+    let width = area.width as usize;
+    let used = left.chars().count() + right.chars().count();
+    let pad = " ".repeat(width.saturating_sub(used));
+
+    let header =
+        Paragraph::new(format!("{left}{pad}{right}")).style(Style::new().reversed().bold());
     frame.render_widget(header, area);
+}
+
+fn status_text(app: &App) -> String {
+    if app.refreshing {
+        return "⟳ refreshing…".to_owned();
+    }
+    if app.error.is_some() {
+        return match app.last_updated {
+            Some(at) => format!("⚠ update failed · last {}", relative_time(at, Utc::now())),
+            None => "⚠ update failed".to_owned(),
+        };
+    }
+    match app.last_updated {
+        Some(at) => {
+            let mut text = format!("⟳ updated {}", relative_time(at, Utc::now()));
+            if !app.highlighted.is_empty() {
+                text.push_str(&format!(" · {} new", app.highlighted.len()));
+            }
+            text
+        }
+        None => String::new(),
+    }
 }
 
 fn render_body(frame: &mut Frame, area: Rect, app: &App) {
@@ -48,8 +74,20 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(block, area);
 
     if app.pull_requests.is_empty() {
-        let empty = Paragraph::new("No open pull requests authored by you.").dim();
-        frame.render_widget(empty, inner);
+        let (message, style) = if let Some(error) = &app.error {
+            (
+                format!("Could not load pull requests:\n\n{error}"),
+                Style::new().red(),
+            )
+        } else if app.last_updated.is_none() {
+            ("Loading…".to_owned(), Style::new().dim())
+        } else {
+            (
+                "No open pull requests authored by you.".to_owned(),
+                Style::new().dim(),
+            )
+        };
+        frame.render_widget(Paragraph::new(message).style(style), inner);
         return;
     }
 
@@ -81,10 +119,14 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
         )));
         frame.render_widget(header, chunks[index * 3]);
 
-        let rows = items.iter().map(|pr| pr_row(pr, now));
+        let rows = items.iter().map(|pr| {
+            let highlighted = app.highlighted.contains(&(pr.repo.clone(), pr.number));
+            pr_row(pr, now, highlighted)
+        });
         let table = Table::new(
             rows,
             [
+                Constraint::Length(1),
                 Constraint::Percentage(26),
                 Constraint::Min(20),
                 Constraint::Length(12),
@@ -96,12 +138,24 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn pr_row<'a>(pr: &'a PullRequest, now: DateTime<Utc>) -> Row<'a> {
+fn pr_row(pr: &PullRequest, now: DateTime<Utc>, highlighted: bool) -> Row<'_> {
+    let marker = if highlighted {
+        Span::styled("▌", Style::new().cyan().bold())
+    } else {
+        Span::raw(" ")
+    };
+    let title_style = if highlighted {
+        Style::new().bold()
+    } else {
+        Style::new()
+    };
+
     Row::new(vec![
+        Cell::from(marker),
         Cell::from(pr.repo.as_str()),
         Cell::from(Line::from(vec![
             Span::styled(format!("#{} ", pr.number), Style::new().dim()),
-            Span::raw(pr.title.as_str()),
+            Span::styled(pr.title.as_str(), title_style),
         ])),
         Cell::from(ci_badge(pr.ci)),
         Cell::from(Span::styled(
@@ -124,6 +178,9 @@ fn render_footer(frame: &mut Frame, area: Rect) {
     let footer = Paragraph::new(Line::from(vec![
         Span::raw(" q ").reversed(),
         Span::raw(" quit"),
+        Span::raw("   "),
+        Span::raw(" r ").reversed(),
+        Span::raw(" refresh"),
         Span::raw("   "),
         Span::raw(" ? ").reversed(),
         Span::raw(" help (soon)"),
