@@ -14,6 +14,7 @@ pub struct App {
     pub viewer: String,
     pub pull_requests: Vec<PullRequest>,
     pub selected: usize,
+    pub detail_open: bool,
     pub refreshing: bool,
     pub last_updated: Option<DateTime<Utc>>,
     pub error: Option<String>,
@@ -30,6 +31,7 @@ impl App {
             viewer,
             pull_requests: Vec::new(),
             selected: 0,
+            detail_open: false,
             refreshing: false,
             last_updated: None,
             error: None,
@@ -103,6 +105,16 @@ impl App {
 
     pub fn select_prev(&mut self) {
         self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn open_detail(&mut self) {
+        if !self.pull_requests.is_empty() {
+            self.detail_open = true;
+        }
+    }
+
+    pub fn close_detail(&mut self) {
+        self.detail_open = false;
     }
 
     pub fn set_error(&mut self, message: String) {

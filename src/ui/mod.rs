@@ -24,13 +24,17 @@ pub fn render(app: &App, frame: &mut Frame) {
 
     render_header(frame, header_area, app);
 
-    let [list_area, detail_area] =
-        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
-            .areas(body_area);
-    dashboard::render(frame, list_area, app);
-    detail::render(frame, detail_area, app);
+    if app.detail_open && !app.pull_requests.is_empty() {
+        let [list_area, detail_area] =
+            Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
+                .areas(body_area);
+        dashboard::render(frame, list_area, app);
+        detail::render(frame, detail_area, app);
+    } else {
+        dashboard::render(frame, body_area, app);
+    }
 
-    render_footer(frame, footer_area);
+    render_footer(frame, footer_area, app);
 }
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -68,19 +72,25 @@ fn status_text(app: &App) -> String {
     }
 }
 
-fn render_footer(frame: &mut Frame, area: Rect) {
+fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
+    let (toggle_key, toggle_label) = if app.detail_open {
+        (" ← ", " close")
+    } else {
+        (" → ", " open")
+    };
+
     let footer = Paragraph::new(Line::from(vec![
-        Span::raw(" q ").reversed(),
-        Span::raw(" quit"),
-        Span::raw("  "),
-        Span::raw(" j/k ").reversed(),
+        Span::raw(" ↑↓ ").reversed(),
         Span::raw(" move"),
+        Span::raw("  "),
+        Span::raw(toggle_key).reversed(),
+        Span::raw(toggle_label),
         Span::raw("  "),
         Span::raw(" r ").reversed(),
         Span::raw(" refresh"),
         Span::raw("  "),
-        Span::raw(" ? ").reversed(),
-        Span::raw(" help"),
+        Span::raw(" q ").reversed(),
+        Span::raw(" quit"),
     ]))
     .style(Style::new().dim());
     frame.render_widget(footer, area);

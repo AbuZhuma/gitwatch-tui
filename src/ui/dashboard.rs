@@ -10,12 +10,6 @@ use super::widgets::ci_glyph;
 use crate::app::App;
 use crate::github::models::{PullRequest, Urgency};
 
-const SECTIONS: [(Urgency, &str, Color); 3] = [
-    (Urgency::Now, "NEEDS ACTION", Color::Red),
-    (Urgency::Soon, "SOON", Color::Yellow),
-    (Urgency::Background, "BACKGROUND", Color::Gray),
-];
-
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -30,24 +24,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let mut items = Vec::new();
-    let mut row_of_pr = vec![0usize; app.pull_requests.len()];
-    let mut current: Option<Urgency> = None;
-
-    for (index, pr) in app.pull_requests.iter().enumerate() {
-        if current != Some(pr.urgency) {
-            current = Some(pr.urgency);
-            items.push(section_item(pr.urgency, &app.pull_requests));
-        }
-        let highlighted = app.highlighted.contains(&(pr.repo.clone(), pr.number));
-        row_of_pr[index] = items.len();
-        items.push(pr_item(pr, highlighted));
-    }
+    let items: Vec<ListItem> = app
+        .pull_requests
+        .iter()
+        .enumerate()
+        .map(|(index, pr)| {
+            let highlighted = app.highlighted.contains(&(pr.repo.clone(), pr.number));
+            pr_item(pr, highlighted, index == app.selected)
+        })
+        .collect();
 
     let mut state = ListState::default();
-    state.select(Some(row_of_pr[app.selected]));
+    state.select(Some(app.selected));
 
-    let list = List::new(items).highlight_style(Style::new().reversed());
+    let list = List::new(items);
     frame.render_stateful_widget(list, inner, &mut state);
 }
 
@@ -67,39 +57,34 @@ fn empty_message(app: &App) -> (String, Style) {
     }
 }
 
-fn section_item(urgency: Urgency, pull_requests: &[PullRequest]) -> ListItem<'static> {
-    let (label, color) = section_meta(urgency);
-    let count = pull_requests
-        .iter()
-        .filter(|pr| pr.urgency == urgency)
-        .count();
-    ListItem::new(Line::from(Span::styled(
-        format!("● {label} ({count})"),
-        Style::new().fg(color).bold(),
-    )))
-}
+fn pr_item(pr: &PullRequest, highlighted: bool, selected: bool) -> ListItem<'static> {
+    let (label, color) = priority(pr.urgency);
 
-fn section_meta(urgency: Urgency) -> (&'static str, Color) {
-    SECTIONS
-        .iter()
-        .find(|(candidate, _, _)| *candidate == urgency)
-        .map(|(_, label, color)| (*label, *color))
-        .unwrap_or(("", Color::Gray))
-}
-
-fn pr_item(pr: &PullRequest, highlighted: bool) -> ListItem<'static> {
-    let marker = if highlighted {
-        Span::styled("▌", Style::new().cyan().bold())
+    let cursor = if selected {
+        Span::styled("▌", Style::new().bold())
     } else {
         Span::raw(" ")
     };
 
+    let base = Style::new().fg(color);
+    let text_style = if highlighted { base.bold() } else { base };
+
     ListItem::new(Line::from(vec![
-        marker,
+        cursor,
         Span::raw(" "),
+        Span::styled(format!("{label:<4}"), base.bold()),
+        Span::raw("  "),
         ci_glyph(pr.ci),
         Span::raw(" "),
-        Span::styled(format!("{} #{} ", pr.repo, pr.number), Style::new().dim()),
-        Span::raw(pr.title.clone()),
+        Span::styled(format!("{} #{} ", pr.repo, pr.number), text_style),
+        Span::styled(pr.title.clone(), text_style),
     ]))
+}
+
+fn priority(urgency: Urgency) -> (&'static str, Color) {
+    match urgency {
+        Urgency::Now => ("NOW", Color::Red),
+        Urgency::Soon => ("SOON", Color::Yellow),
+        Urgency::Background => ("LOW", Color::Cyan),
+    }
 }

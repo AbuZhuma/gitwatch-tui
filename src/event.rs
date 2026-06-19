@@ -4,9 +4,12 @@ use tokio::sync::mpsc;
 pub enum Action {
     None,
     Quit,
+    Back,
     Refresh,
     Next,
     Prev,
+    Open,
+    Close,
 }
 
 pub fn spawn_key_reader() -> mpsc::Receiver<KeyEvent> {
@@ -29,10 +32,13 @@ pub fn spawn_key_reader() -> mpsc::Receiver<KeyEvent> {
 
 pub fn on_key(code: KeyCode) -> Action {
     match code {
-        KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
+        KeyCode::Char('q') => Action::Quit,
+        KeyCode::Esc => Action::Back,
         KeyCode::Char('r') => Action::Refresh,
-        KeyCode::Char('j') | KeyCode::Down => Action::Next,
-        KeyCode::Char('k') | KeyCode::Up => Action::Prev,
+        KeyCode::Down | KeyCode::Char('j') => Action::Next,
+        KeyCode::Up | KeyCode::Char('k') => Action::Prev,
+        KeyCode::Right | KeyCode::Enter | KeyCode::Char('l') => Action::Open,
+        KeyCode::Left | KeyCode::Char('h') => Action::Close,
         _ => Action::None,
     }
 }
