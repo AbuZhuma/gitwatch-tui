@@ -66,18 +66,26 @@ fn pr_item(pr: &PullRequest, highlighted: bool, selected: bool) -> ListItem<'sta
         Span::raw(" ")
     };
 
-    let base = Style::new().fg(color);
-    let text_style = if highlighted { base.bold() } else { base };
+    let weight = |style: Style| if highlighted { style.bold() } else { style };
 
     ListItem::new(Line::from(vec![
         cursor,
         Span::raw(" "),
-        Span::styled(format!("{label:<4}"), base.bold()),
+        Span::styled(format!("{label:<4}"), Style::new().fg(color).bold()),
         Span::raw("  "),
         ci_glyph(pr.ci),
         Span::raw(" "),
-        Span::styled(format!("{} #{} ", pr.repo, pr.number), text_style),
-        Span::styled(pr.title.clone(), text_style),
+        Span::styled(
+            format!("{} #{}", pr.repo, pr.number),
+            weight(Style::new().fg(Color::Blue)),
+        ),
+        Span::raw("  "),
+        Span::styled(pr.title.clone(), weight(Style::new())),
+        Span::raw("  "),
+        Span::styled(
+            format!("{} → {}", pr.head_ref, pr.base_ref),
+            weight(Style::new().fg(Color::Magenta)),
+        ),
     ]))
 }
 
