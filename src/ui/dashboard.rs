@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::app::App;
 
-pub fn render(_app: &App, frame: &mut Frame) {
+pub fn render(app: &App, frame: &mut Frame) {
     let [header_area, body_area, footer_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -16,15 +16,15 @@ pub fn render(_app: &App, frame: &mut Frame) {
     ])
     .areas(frame.area());
 
-    render_header(frame, header_area);
+    render_header(frame, header_area, app);
     render_body(frame, body_area);
     render_footer(frame, footer_area);
 }
 
-fn render_header(frame: &mut Frame, area: Rect) {
+fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let header = Paragraph::new(Line::from(vec![
         Span::raw(" gitwatch "),
-        Span::raw("· skeleton"),
+        Span::raw(format!("· @{} ", app.viewer)),
     ]))
     .style(Style::new().reversed().bold());
     frame.render_widget(header, area);
@@ -37,10 +37,9 @@ fn render_body(frame: &mut Frame, area: Rect) {
         .padding(Padding::uniform(1));
 
     let lines = vec![
-        Line::from("Skeleton is up and running.").bold(),
+        Line::from("Signed in.").bold(),
         Line::from(""),
-        Line::from("Next stages will fill this in:"),
-        Line::from("  • stage 1 — sign in via `gh auth token`"),
+        Line::from("Next stages:"),
         Line::from("  • stage 2 — fetch your open PRs (GraphQL batch)"),
         Line::from("  • stage 3 — urgency sections 🔴 🟡 ⚪"),
         Line::from("  • stage 5 — split-pane PR details"),

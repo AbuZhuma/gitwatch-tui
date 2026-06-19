@@ -6,10 +6,13 @@ mod github;
 mod notify;
 mod ui;
 
+use std::io::IsTerminal;
+
 use anyhow::Result;
 use clap::Parser;
 
 use crate::app::App;
+use crate::github::client::Client;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -19,11 +22,23 @@ use crate::app::App;
 )]
 struct Cli {}
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let _cli = Cli::parse();
 
+    let token = match github::auth::token() {
+        Ok(token) => token,
+        Err(e) => {
+            let color = std::io::stderr().is_terminal();
+            eprint!("{}", e.guidance().render(color));
+            std::process::exit(1);
+        }
+    };
+    let client = Client::new(token)?;
+    let viewer = client.viewer_login().await?;
+
     let mut terminal = ratatui::init();
-    let mut app = App::new();
+    let mut app = App::new(viewer);
     let result = run(&mut terminal, &mut app);
     ratatui::restore();
     result
